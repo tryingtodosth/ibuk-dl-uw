@@ -24,7 +24,7 @@ cd ibuk-dl-uw
 2. Install required Python packages:
 
 ```shell
-pip install weasyprint beautifulsoup4 requests websockets
+pip install weasyprint beautifulsoup4 requests websockets tqdm
 
 ```
 
@@ -43,7 +43,7 @@ The website will ask you for your BUW credentials (the ones this script needs to
 To download a book and save it directly as a PDF, use the following command (assuming you run it as a module):
 
 ```shell
-python -m ibuk_dl.main -v download -o "BOOK.pdf" -u BUW_LOGIN -p "BUW_PASSWORD" "https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614"
+python -m ibuk-dl-uw.ibuk_dl.main -v download -o "BOOK.pdf" -u BUW_LOGIN -p "BUW_PASSWORD" "https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614"
 
 ```
 

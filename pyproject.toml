@@ -13,7 +13,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Intended Audience :: End Users/Desktop",
 ]
-dependencies = ["beautifulsoup4", "requests", "websockets", "weasyprint"]
+dependencies = ["beautifulsoup4", "requests", "websockets", "weasyprint", "tqdm"]
 
 [project.scripts]
 ibuk-dl = "ibuk_dl.main:run_main"

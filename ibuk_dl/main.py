@@ -10,8 +10,54 @@ import urllib.parse
 import requests
 import websockets
 from bs4 import BeautifulSoup, Tag
+from tqdm import tqdm
 
 from .yeast import yeast
+
+
+class WeasyprintProgressHandler(logging.Handler):
+    """Przechwytuje logi WeasyPrint i rysuje pasek postępu tqdm."""
+    def __init__(self):
+        super().__init__()
+        # WeasyPrint ma domyślnie 7 kroków generowania PDF
+        self.pbar = tqdm(
+            total=7, 
+            desc="Konwersja PDF ", 
+            unit="etap", 
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, Aktualnie: {postfix}]"
+        )
+        self.pbar.set_postfix_str("Inicjalizacja...")
+
+    def emit(self, record):
+        msg = record.getMessage()
+        # Wyłapujemy ze standardowych logów numer kroku, np. "Step 1 - Fetching and parsing HTML"
+        match = re.match(r"Step (\d+) - (.+)", msg)
+        if match:
+            step_num = int(match.group(1))
+            step_desc = match.group(2)
+            
+            # Tłumaczymy wewnętrzne kroki WeasyPrint na język polski
+            translations = {
+                "Fetching and parsing HTML": "Pobieranie i parsowanie HTML",
+                "Fetching and parsing CSS": "Pobieranie i parsowanie CSS",
+                "Applying CSS": "Aplikowanie stylów CSS",
+                "Creating formatting structure": "Tworzenie struktury formatowania",
+                "Formatting pages": "Obliczanie układu stron i łamanie tekstu",
+                "Drawing pages": "Rysowanie dokumentu",
+                "Adding metadata": "Dodawanie metadanych"
+            }
+            desc_pl = translations.get(step_desc, step_desc)
+            
+            self.pbar.n = step_num
+            self.pbar.set_postfix_str(f"{desc_pl}...")
+            self.pbar.refresh()
+
+    def close(self):
+        self.pbar.n = 7
+        self.pbar.set_postfix_str("Zakończono")
+        self.pbar.refresh()
+        self.pbar.close()
+        super().close()
 
 
 class BookMetadata:
@@ -32,7 +78,6 @@ class IbukWebSession(requests.Session):
         super().__init__()
         self._api_key = api_key
         
-        # Maskujemy główną sesję HTTP (WAF nas nie zablokuje)
         self.headers.update({
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -94,7 +139,6 @@ class IbukWebSession(requests.Session):
 
 
 class IbukWebSocketSession:
-    # ZMIANA: Skierowaliśmy strumień na prawdziwy serwer wczytywania książek (libra22)
     def __init__(
         self, api_key: str, web_session: requests.Session, socket_io_base_url="libra22.ibuk.pl/socket.io"
     ) -> None:
@@ -107,7 +151,6 @@ class IbukWebSocketSession:
         
         await asyncio.sleep(0.5)
         
-        # Na tym węźle apiKey musi być ponownie dołączone do samego WebSocketu
         params = {
             "apiKey": self._api_key,
             "isServer": "0",
@@ -193,8 +236,6 @@ class IbukWebSocketSession:
         res = str(await self.ws.recv())
         assert "40/books," in res
         
-        # ZMIANA: Czasami Socket.IO w wersji 4 skleja pakiety za pomocą separatora bajtowego,
-        # lub przesyła {"usrSocketId": ...}. Szukamy więc swobodnie słowa ["ready".
         if '42/books,["ready"' in res:
             return
             
@@ -211,7 +252,6 @@ class IbukWebSocketSession:
                 await self.ws.send("3")
             else:
                 return msg
-
 
     async def get_page(self, book_id, page: int) -> str:
         await self.ws.send(
@@ -238,55 +278,63 @@ class IbukWebSocketSession:
         fonts = json.loads(json.loads(r.split("42/books,")[1])[1])["html"]
         fonts = re.sub("; format", " format", fonts)
         return fonts
-    
+
     async def get_book_html(self, book_id, page_n: int) -> str:
         fonts = await self.get_fonts(book_id)
         style = await self.get_css(book_id)
         pages = []
         
-        # Zmienne domyślne (zostaną nadpisane)
-        page_width = 839
-        page_height = 1187 
+        page_width = 954.667
+        page_height = 1326.65
 
-        for i in range(1, page_n + 1):
-            print(f"Pobieranie strony {i} / {page_n} ...")
-            logging.info(f"Pobieranie strony {i} z {page_n}...")
+        print("") # Pusta linijka dla czytelności w terminalu       
+        # OWIJAMY PĘTLĘ W ŁADNY PASEK TQDM
+        for i in tqdm(range(1, page_n + 1), desc="Pobieranie stron", unit="str"):
+            # TĘ LINIJKĘ USUŃ LUB ZAKOMENTUJ:
+            # logging.info(f"Pobieranie strony {i} z {page_n}...")
+            
             try:
                 page = await self.get_page(book_id, i)
             except PermissionError:
                 break
-                
-            # Skanujemy pierwszą stronę w poszukiwaniu jej precyzyjnych wymiarów
-            if i == 1:
-                match = re.search(r'width:\s*([\d.]+)px;\s*height:\s*([\d.]+)px', page)
-                if match:
-                    page_width = float(match.group(1))
-                    page_height = float(match.group(2))
-                    print(f"Wykryto idealny rozmiar kartki docelowej: {page_width} x {page_height} px")
-            
+        
             pages.append(f'<div class="pdf-page-wrapper">{page}</div>')
-            
-        print("\nZakończono pobieranie z serwera! Składanie pliku...")
+
+
+
+
+
+        print("\nZakończono pobieranie z serwera! Składanie pliku...\n")
 
         pages_joined = "\n".join(pages)
         
-        # Używamy wyciągniętych ze skryptu wymiarów bezpośrednio do stworzenia PDF
         pdf_styles = f"""
         @media print {{
-            body, html {{ margin: 0; padding: 0; background-color: #fff; }}
+            @page {{
+                size: {page_width}px {page_height}px;
+                margin: 0;
+            }}
+            body, html {{ 
+                margin: 0 !important; 
+                padding: 0 !important; 
+                background-color: #fff; 
+            }}
             .pdf-page-wrapper {{
                 page-break-after: always;
                 break-after: page;
                 position: relative;
+                width: 100% !important;
+                height: 100% !important;
                 overflow: hidden;
                 display: block;
-                width: {page_width}px;
-                height: {page_height}px;
+                box-sizing: border-box;
             }}
-        }}
-        @page {{
-            size: {page_width}px {page_height}px;
-            margin: 0;
+            .pagetext {{
+                width: 100% !important;
+                height: 100% !important;
+                transform-origin: top left;
+                position: relative !important;
+            }}
         }}
         """
 
@@ -306,10 +354,13 @@ class IbukWebSocketSession:
                     </body>
                 </html>"""
         return html
+
+
 async def download_action(
     url: str, page_count: int | None, ibs: IbukWebSession, output
 ):
     logging.info(f"Fetching book from URL: {url}")
+    print("Inicjalizacja połączenia i autoryzacja...")
     book_metadata = ibs.get_book_metadata(url)
 
     if not page_count:
@@ -320,30 +371,41 @@ async def download_action(
     async with IbukWebSocketSession(ibs.api_key(), ibs) as ibws:
         book = await ibws.get_book_html(book_metadata.index, page_count)
 
-    # ZMIANA: Sprawdzamy rozszerzenie pliku wyjściowego i decydujemy o formacie
     if output.lower().endswith(".pdf"):
         try:
             from weasyprint import HTML
+            import logging as wp_logging
         except ImportError:
             logging.error("Biblioteka 'weasyprint' nie jest zainstalowana! Zainstaluj ją wpisując: pip install weasyprint")
             sys.exit(1)
             
-        print("Trwa konwersja do pliku PDF (to może zająć chwilę przy dużych książkach)...")
-        # Generowanie PDF bez wchodzenia do przeglądarki!
-        HTML(string=book).write_pdf(output)
-        print(f"Gotowe! Książka \"{book_metadata.title}\" została z sukcesem zapisana jako: {output}")
+        # Podłączamy naszego szpiega do logów WeasyPrint
+        wp_logger = wp_logging.getLogger("weasyprint.progress")
+        wp_logger.setLevel(wp_logging.INFO)
+        wp_logger.propagate = False # Zapobiega wypluwaniu surowych logów do konsoli
+        
+        progress_handler = WeasyprintProgressHandler()
+        wp_logger.addHandler(progress_handler)
+        
+        try:
+            HTML(string=book).write_pdf(output)
+        finally:
+            progress_handler.close()
+            wp_logger.removeHandler(progress_handler)
+            
+        print(f"\nGotowe! Książka \"{book_metadata.title}\" została z sukcesem zapisana jako: {output}")
         
     else:
         try:
             if output == "-":
                 sys.stdout.write(book)
             else:
-                # Wymuszamy kodowanie UTF-8, żeby polskie znaki się nie rozsypały
                 with open(output, "w+", encoding="utf-8") as f:
                     f.write(book)
-            print(f"Gotowe! Książka \"{book_metadata.title}\" została zapisana jako HTML: {output}")
+            print(f"\nGotowe! Książka \"{book_metadata.title}\" została zapisana jako HTML: {output}")
         except Exception as e:
             logging.error(f"Wystąpił błąd przy zapisie HTML: {e}")
+
 
 async def query_action(url: str, ibs: IbukWebSession):
     logging.info(f"Querying book info for URL: {url}")
