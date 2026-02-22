@@ -16,7 +16,7 @@ This speciﬁc fork/version has been adapted to work with the **University of Wa
 
 1. Clone the repository:
 ```shell
-git clone [https://github.com/tryingtodosth/ibuk-dl-uw](https://github.com/tryingtodosth/ibuk-dl-uw)
+git clone https://github.com/tryingtodosth/ibuk-dl-uw
 cd ibuk-dl-uw
 
 ```
@@ -43,7 +43,7 @@ The website will ask you for your BUW credentials (the ones this script needs to
 To download a book and save it directly as a PDF, use the following command (assuming you run it as a module):
 
 ```shell
-python -m ibuk_dl.main -v download -o "BOOK.pdf" -u BUW_LOGIN -p "BUW_PASSWORD" "[https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614](https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614)"
+python -m ibuk_dl.main -v download -o "BOOK.pdf" -u BUW_LOGIN -p "BUW_PASSWORD" "https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614"
 
 ```
 
@@ -61,7 +61,7 @@ python -m ibuk_dl.main -v download -o "BOOK.pdf" -u BUW_LOGIN -p "BUW_PASSWORD" 
 To just fetch metadata about a book without downloading it:
 
 ```shell
-python -m ibuk_dl.main query "[https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614](https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614)"
+python -m ibuk_dl.main query "https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614"
 
 ```
 
