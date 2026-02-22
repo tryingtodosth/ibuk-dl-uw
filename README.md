@@ -1,73 +1,71 @@
-# IBUK Downloader
 
-This script allows you to download books from the libra.ibuk.pl website and query book information from a given URL.
+# IBUK Downloader (UW HAN Edition)
+
+This script allows you to download books from the libra.ibuk.pl website and query book information from a given URL. 
+This speciﬁc fork/version has been adapted to work with the **University of Warsaw (UW) HAN authentication system**.
 
 ## Features
 
-- Download books from libra.ibuk.pl.
+- Download books directly from libra.ibuk.pl.
+- **Auto-PDF Generation:** Automatically converts the downloaded book into a perfectly formatted PDF with proper page breaks (if the output file ends with `.pdf`).
 - Query book information, including author, title, description, publisher, ISBN, pages, and index.
-- Support for PW (Politechnika Warszawska/Warsaw University of Technology) authentication to access restricted content.
+- Bypass HAN WAF and Load Balancers.
+- Support for **BUW (Biblioteka Uniwersytecka w Warszawie)** authentication to access restricted content.
 
 ## Installation
 
+1. Clone the repository:
 ```shell
-pip install ibuk-dl
+git clone [https://github.com/tryingtodosth/ibuk-dl-uw](https://github.com/tryingtodosth/ibuk-dl-uw)
+cd ibuk-dl-uw
+
 ```
+
+2. Install required Python packages:
+
+```shell
+pip install weasyprint beautifulsoup4 requests websockets
+
+```
+
+> **Note for Windows users:** > The `weasyprint` library (used for PDF generation) requires additional non-Python dependencies (GTK3/Pango) to work on Windows. If you encounter an `OSError` during PDF export, please follow the official [WeasyPrint Windows Installation Guide](https://www.google.com/search?q=https://weasyprint.readthedocs.io/en/latest/install.html%23windows). Linux and macOS usually handle it out of the box or via a simple package manager install.
 
 ## Usage
 
-### Download a Book
+### 1. Find your book
 
-To download a book, use the following command:
+Go to: https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/ksiazki
+The website will ask you for your BUW credentials (the ones this script needs to work).
+*Note: You DON'T need a dedicated PWN/IBUK account.*
 
-```shell
-ibuk-dl download <URL>
-```
+### 2. Download the book
 
-You can specify the page count with the `--page-count` option (if not specified, will download every page) and the output file with the `-o` or `--output` option. Use `-` as the output to print the book content to stdout. Add -v to print progress information to the console.
-
-If the book is behind PW authentication, you can provide your username and password with the `-u` and `-p` options, respectively. You will also need to use an URL that starts with `http://eczyt.bg.pw.edu.pl/han/ibuk/`
-
-Example:
+To download a book and save it directly as a PDF, use the following command (assuming you run it as a module):
 
 ```shell
-ibuk-dl -v download --output "podstawy-teorii-obwodow-tom-2.html" -u 123123 -p password http://eczyt.bg.pw.edu.pl/han/ibuk/https/libra.ibuk.pl/reader/podstawy-teorii-obwodow-tom-2-jerzy-osiowski-jerzy-szabatin-234596
+python -m ibuk_dl.main -v download -o "BOOK.pdf" -u BUW_LOGIN -p "BUW_PASSWORD" "[https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614](https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614)"
+
 ```
 
-More information about `download`:
+> **⚠️ IMPORTANT: BUW Credentials**
+> Your `BUW_LOGIN` is usually your Electronic Student ID (ELS) number or BUW Library Card number. **It is NOT your PESEL number!**
 
-```shell
-ibuk-dl download --help
-```
+### Options
+
+* You can specify the page count with the `--page-count` option (e.g., `--page-count 40`). If not specified, the script will download the entire book.
+* Use the `-o` or `--output` option to specify the filename. **If you use a `.pdf` extension, the script will automatically render a PDF file.** If you use `.html` or `-` (stdout), it will output raw HTML.
+* Add `-v` (verbose) to print detailed progress information to the console.
 
 ### Query Book Information
 
-To query book information, use the following command:
+To just fetch metadata about a book without downloading it:
 
 ```shell
-ibuk-dl query <URL>
+python -m ibuk_dl.main query "[https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614](https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614)"
+
 ```
-
-Example:
-
-```shell
-ibuk-dl -v query https://libra.ibuk.pl/reader/podstawy-teorii-obwodow-tom-2-jerzy-osiowski-jerzy-szabatin-234596
-```
-
-More information about `query`:
-
-```shell
-ibuk-dl query --help
-```
-
-## Export to PDF
-
-This script will output HTML. If you want to have a PDF, you can use your browser's `Print -> Save to PDF` option.
-
-## License
-
-This script is provided under a MIT License. See [LICENSE](/LICENSE)
 
 ## Disclaimer
 
 As stated in the license, I am not responsible for damage caused by the use of this program. Please respect the terms of use of the libra.ibuk.pl website and any copyright or licensing agreements for the downloaded content. Downloading and/or sharing copyrighted content may be considered illegal in your country.
+
