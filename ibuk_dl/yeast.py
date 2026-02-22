@@ -1,7 +1,7 @@
 # https://github.com/BroHui/python-yeast
 #
 # MIT License
-#
+# 
 # Copyright (c) 2018 Hui
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
