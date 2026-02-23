@@ -69,3 +69,6 @@ python -m ibuk_dl.main query "https://han.buw.uw.edu.pl/han/libra/https/libra.ib
 
 As stated in the license, I am not responsible for damage caused by the use of this program. Please respect the terms of use of the libra.ibuk.pl website and any copyright or licensing agreements for the downloaded content. Downloading and/or sharing copyrighted content may be considered illegal in your country.
 
+> **⚠️ IMPORTANT: Intellectual Property**
+> Your `BUW_LOGIN` might be encrypted somewhere in the file, so if your PDF happens to end up published on z-lib, annas-archive or alike **You might have a BAD time!**
+
