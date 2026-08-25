@@ -1,16 +1,21 @@
 
 # IBUK Downloader (UW HAN Edition)
 
-This script allows you to download books from the libra.ibuk.pl website and query book information from a given URL. 
-This speciﬁc fork/version has been adapted to work with the **University of Warsaw (UW) HAN authentication system**.
+Download books from the PWN **IBUK / "Czytnik PWN"** reader and save them as PDF (or raw HTML).
+This fork is adapted to the **University of Warsaw (UW) HAN authentication system** (BUW e-zbiory).
+
+> **2026 rewrite:** BUW moved HAN to per-session *subdomain* proxying and PWN replaced the old
+> `libra` reader with a new Angular **"Czytnik PWN"** app. The downloader was rewritten to match:
+> it logs in through HAN, reserves a reading slot via the reader's REST API, and streams pages
+> over socket.io (HTTP long-polling, because the WebSocket upgrade is blocked through HAN).
 
 ## Features
 
-- Download books directly from libra.ibuk.pl.
-- **Auto-PDF Generation:** Automatically converts the downloaded book into a perfectly formatted PDF with proper page breaks (if the output file ends with `.pdf`).
-- Query book information, including author, title, description, publisher, ISBN, pages, and index.
-- Bypass HAN WAF and Load Balancers.
-- Support for **BUW (Biblioteka Uniwersytecka w Warszawie)** authentication to access restricted content.
+- Download a whole book (or a page range) and render it to a **PDF** with proper page breaks.
+- Output raw **HTML** instead (use an `.html` filename, or `-` for stdout).
+- Query book information (author, title, description, publisher, ISBN, pages).
+- Works through the HAN proxy (subdomain rewriting + Bunny Shield + load balancing).
+- Uses your **BUW (Biblioteka Uniwersytecka w Warszawie)** library account — no separate PWN/IBUK account needed.
 
 ## Installation
 
@@ -18,57 +23,77 @@ This speciﬁc fork/version has been adapted to work with the **University of Wa
 ```shell
 git clone https://github.com/tryingtodosth/ibuk-dl-uw
 cd ibuk-dl-uw
-
 ```
 
-2. Install required Python packages:
-
+2. Install the required Python packages:
 ```shell
-pip install weasyprint beautifulsoup4 requests websockets tqdm
-
+pip install weasyprint requests tqdm
 ```
 
-> **Note for Windows users:** > The `weasyprint` library (used for PDF generation) requires additional non-Python dependencies (GTK3/Pango) to work on Windows. If you encounter an `OSError` during PDF export, please follow the official [WeasyPrint Windows Installation Guide](https://www.google.com/search?q=https://weasyprint.readthedocs.io/en/latest/install.html%23windows). Linux and macOS usually handle it out of the box or via a simple package manager install.
+> **Note for Windows users:** `weasyprint` (used for PDF generation) needs the non-Python GTK3/Pango
+> libraries. If you hit an `OSError` during PDF export, follow the official
+> [WeasyPrint Windows installation guide](https://weasyprint.readthedocs.io/en/latest/install.html#windows).
+> Linux/macOS usually work out of the box or via the system package manager.
 
 ## Usage
 
+> **Login is required.** Access is granted through your library account, so every command needs
+> `-u BUW_LOGIN -p BUW_PASSWORD`.
+
 ### 1. Find your book
 
-Go to: https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/ksiazki
-The website will ask you for your BUW credentials (the ones this script needs to work).
-*Note: You DON'T need a dedicated PWN/IBUK account.*
+Open the book in the BUW e-zbiory / IBUK catalogue in your browser and copy the address that
+**ends with the book's numeric IBUK id**, e.g. `...-157425`:
+
+```
+https://libra-1ibuk-1pl-1XXXXXXXX.han.buw.uw.edu.pl/reader/biologia-molekularna-bakterii-jadwiga-baj-zdzislaw-157425
+```
+
+The script only needs that trailing number, so any of these also work:
+
+- the HAN subdomain URL above,
+- an old-style `https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/...-157425` URL,
+- a plain `https://libra.ibuk.pl/reader/...-157425` URL.
+
+> ⚠️ **Do not** use the in-app reader URL that looks like `/reader/6a1d75...ada9f/23` — that path
+> contains the internal document id and a page number, not the IBUK id, and won't resolve.
 
 ### 2. Download the book
 
-To download a book and save it directly as a PDF, use the following command (assuming you run it as a module):
+Save directly as PDF:
 
 ```shell
-python -m ibuk-dl-uw.ibuk_dl.main -v download -o "BOOK.pdf" -u BUW_LOGIN -p "BUW_PASSWORD" "https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614"
-
+python -m ibuk_dl.main -v download -o "BOOK.pdf" \
+  -u BUW_LOGIN -p "BUW_PASSWORD" \
+  "https://libra-1ibuk-1pl-1XXXXXXXX.han.buw.uw.edu.pl/reader/biologia-molekularna-bakterii-jadwiga-baj-zdzislaw-157425"
 ```
 
-> **⚠️ IMPORTANT: BUW Credentials**
-> Your `BUW_LOGIN` is usually your Electronic Student ID (ELS) number or BUW Library Card number. **It is NOT your PESEL number!**
+> **⚠️ BUW credentials:** `BUW_LOGIN` is your Electronic Student ID (ELS) number or BUW Library
+> Card number. **It is NOT your PESEL.** Wrap the password in quotes if it contains special characters.
 
 ### Options
 
-* You can specify the page count with the `--page-count` option (e.g., `--page-count 40`). If not specified, the script will download the entire book.
-* Use the `-o` or `--output` option to specify the filename. **If you use a `.pdf` extension, the script will automatically render a PDF file.** If you use `.html` or `-` (stdout), it will output raw HTML.
-* Add `-v` (verbose) to print detailed progress information to the console.
+- `--page-count N` — download only the first `N` pages. If omitted, the whole book is fetched.
+- `-o`, `--output` — output file. A `.pdf` name renders a PDF; `.html` (or `-` for stdout) writes raw HTML.
+- `-v` — verbose progress; `-q` — quiet.
 
-### Query Book Information
-
-To just fetch metadata about a book without downloading it:
+### Query book information
 
 ```shell
-python -m ibuk_dl.main query "https://han.buw.uw.edu.pl/han/libra/https/libra.ibuk.pl/reader/wspolczesne-wyzwania-prawa-wlasnosci-intelektualnej-jan-olszewski-elzbieta-206614"
-
+python -m ibuk_dl.main query -u BUW_LOGIN -p "BUW_PASSWORD" \
+  "https://libra-1ibuk-1pl-1XXXXXXXX.han.buw.uw.edu.pl/reader/biologia-molekularna-bakterii-jadwiga-baj-zdzislaw-157425"
 ```
+
+## Notes
+
+- Downloads run **page by page** over long-polling, so a large book takes a few minutes; the reading
+  slot is refreshed automatically and the connection reconnects on transient errors.
+- The generated PDF stores only the book's **Title** and **Author** in its metadata (plus WeasyPrint's
+  own producer/timestamps). Your login is **not** written into the file.
 
 ## Disclaimer
 
-As stated in the license, I am not responsible for damage caused by the use of this program. Please respect the terms of use of the libra.ibuk.pl website and any copyright or licensing agreements for the downloaded content. Downloading and/or sharing copyrighted content may be considered illegal in your country.
-
-> **⚠️ IMPORTANT: Intellectual Property**
-> Your `BUW_LOGIN` might be encrypted somewhere in the file, so if your PDF happens to end up published on z-lib, annas-archive or alike **You might have a BAD time!**
-
+As stated in the license, the authors are not responsible for any damage caused by using this program.
+Respect the terms of use of the IBUK/PWN service and the copyright and licensing of the content.
+Downloading and/or sharing copyrighted material may be illegal in your country — download only what you
+are entitled to, and keep it to yourself.
