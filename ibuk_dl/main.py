@@ -449,7 +449,10 @@ def download_book_html(ibs: IbukSession, meta: BookMetadata, page_count: int) ->
         i = 1
         pbar = tqdm(total=page_count, desc="Pobieranie stron", unit="str")
         while i <= page_count:
-            want_extras = (i == 1)  # css + fonty tylko przy pierwszej stronie
+            # Serwer wymaga pola "css" w KAŻDYM żądaniu strony, inaczej przeliczanie
+            # pozycji/rozmiarów czcionek na danej stronie wychodzi jako NaN (px->rem);
+            # fonty (@font-face) są za to wspólne dla całej książki, więc wystarczy raz.
+            want_font = (i == 1)
             try:
                 # Odświeżanie rezerwacji slotu (slot ~5 min).
                 if time.time() - last_refresh > 200:
@@ -459,16 +462,16 @@ def download_book_html(ibs: IbukSession, meta: BookMetadata, page_count: int) ->
                         pass
                     last_refresh = time.time()
 
-                res = sock.request_combined(i, i, want_css=want_extras, want_font=want_extras)
+                res = sock.request_combined(i, i, want_css=True, want_font=want_font)
             except (TimeoutError, RuntimeError, requests.RequestException) as e:
                 logging.warning(f"Problem przy stronie {i} ({e}) – ponawiam połączenie.")
                 sock.close()
                 sock = new_socket()
                 last_refresh = time.time()
-                res = sock.request_combined(i, i, want_css=want_extras, want_font=want_extras)
+                res = sock.request_combined(i, i, want_css=True, want_font=want_font)
 
-            if want_extras:
-                css = res.get("css") or css
+            css = res.get("css") or css
+            if want_font:
                 fonts = res.get("font") or fonts
             pages.append(res["page"])
             pbar.update(1)
