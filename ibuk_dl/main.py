@@ -95,10 +95,42 @@ class IbukSession(requests.Session):
             raise RuntimeError("Brak tokenu sesji HAN – najpierw zaloguj się (login_uw).")
         return f"{host.replace('.', '-1')}-1{self._token}.{HAN_BASE}"
 
-    def login_uw(self, username, password):
+    def _follow_manual(self, url: str, timeout: int = 30, max_hops: int = 10):
+        """GET z ręcznym podążaniem za przekierowaniami (hop po hopie).
+
+        Automatyczne podążanie za przekierowaniami w `requests` (resolve_redirects)
+        potrafi zawiesić się na łańcuchu proxy HAN (żądanie nigdy nie dostaje
+        odpowiedzi mimo że ten sam skok wykonany jako osobne, świeże GET wraca
+        natychmiast) – dlatego przechodzimy przez przekierowania ręcznie."""
+        for _ in range(max_hops):
+            r = self.get(url, timeout=timeout, allow_redirects=False)
+            location = r.headers.get("Location")
+            if not location or r.status_code not in (301, 302, 303, 307, 308):
+                return r
+            url = urllib.parse.urljoin(url, location)
+        raise RuntimeError(f"Zbyt wiele przekierowań przy: {url}")
+
+    def login_uw(self, username, password, retries: int = 2):
+        """Logowanie z ponowieniami – łańcuch proxy HAN czasem zawiesza pojedyncze
+        żądanie na całym timeoucie (patrz `_follow_manual`); pojedynczy retry po
+        krótkiej przerwie zwykle wystarcza."""
+        for attempt in range(1, retries + 2):
+            try:
+                return self._login_uw_once(username, password)
+            except requests.exceptions.Timeout as e:
+                if attempt > retries:
+                    raise
+                delay = 10 * attempt
+                logging.warning(
+                    f"Logowanie: timeout HAN ({e}), próba {attempt}/{retries} nieudana, "
+                    f"ponawiam za {delay}s."
+                )
+                time.sleep(delay)
+
+    def _login_uw_once(self, username, password):
         logging.info("Logowanie przez UW (HAN)")
         entry_url = f"https://{HAN_BASE}/han/libra/https/libra.ibuk.pl/"
-        self.get(entry_url, timeout=30)  # cookiecheck
+        self._follow_manual(entry_url)  # cookiecheck
 
         data = {
             "plainuser": username,
@@ -106,9 +138,13 @@ class IbukSession(requests.Session):
             "password": hashlib.md5(password.encode("utf-8")).hexdigest(),
             "user": username,
         }
-        self.post("https://login.han.buw.uw.edu.pl/hhauth/login", data=data, timeout=30)
+        r = self.post("https://login.han.buw.uw.edu.pl/hhauth/login", data=data,
+                       timeout=30, allow_redirects=False)
+        location = r.headers.get("Location")
+        if location:
+            self._follow_manual(urllib.parse.urljoin(r.url, location))
 
-        r = self.get(entry_url, timeout=30)
+        r = self._follow_manual(entry_url)
         assert r.status_code == 200
         final_host = urllib.parse.urlsplit(r.url).netloc
 
