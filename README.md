@@ -75,7 +75,36 @@ python -m ibuk_dl.main -v download -o "BOOK.pdf" \
 
 - `--page-count N` — download only the first `N` pages. If omitted, the whole book is fetched.
 - `-o`, `--output` — output file. A `.pdf` name renders a PDF; `.html` (or `-` for stdout) writes raw HTML.
-- `-v` — verbose progress; `-q` — quiet.
+- `-v` — add diagnostic log lines (login, access slots, per-page retries); `-q` — quiet.
+- Relative `-o` paths are resolved against the directory you run the command in.
+
+### Credentials from the system keyring (recommended)
+
+Instead of typing `-u`/`-p` every time, the script also reads `IBUK_USER` and `IBUK_PASS` from the
+environment (CLI flags still win). That keeps the password out of `argv`, so it is not visible to
+other local users via `/proc/<pid>/cmdline` and never lands in your shell history.
+
+Store the credentials once in your desktop wallet (libsecret / Secret Service — works with both
+gnome-keyring and KWallet; on Arch/EndeavourOS: `pacman -S libsecret`):
+
+```shell
+secret-tool store --label='BUW / ibuk-dl' service ibuk-dl-uw key username
+secret-tool store --label='BUW / ibuk-dl' service ibuk-dl-uw key password
+```
+
+Then install the `ibuk` wrapper to `~/.local/bin/ibuk` (see `contrib/ibuk`), which looks the secrets
+up, creates the venv on first run, and derives the output filename from the URL slug. The PDF is
+written to **the directory you are standing in**, not to the repo:
+
+```shell
+install -m 700 contrib/ibuk ~/.local/bin/ibuk
+ibuk "https://libra-1ibuk-1pl-1XXXXXXXX.han.buw.uw.edu.pl/reader/biologia-molekularna-bakterii-jadwiga-baj-zdzislaw-157425"
+```
+
+Any extra `ibuk-dl` options still pass through, e.g. `ibuk "<URL>" -o Moja.pdf --page-count 5`.
+Set `IBUK_VERBOSITY=-v` for the diagnostic log lines (the wrapper runs quiet by default).
+If `secret-tool` is unavailable, the wrapper falls back to [`pass`](https://www.passwordstore.org/)
+(`ibuk-dl-uw/username`, `ibuk-dl-uw/password`).
 
 ### Query book information
 

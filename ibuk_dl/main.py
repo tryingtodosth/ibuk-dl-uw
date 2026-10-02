@@ -4,6 +4,7 @@ import hashlib
 import html as html_lib
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -15,45 +16,183 @@ from tqdm import tqdm
 HAN_BASE = "han.buw.uw.edu.pl"
 
 
-class WeasyprintProgressHandler(logging.Handler):
-    """Przechwytuje logi WeasyPrint i rysuje pasek postępu tqdm."""
+# --- wyjście dla człowieka -----------------------------------------------------
+# Wszystko, co jest sprawozdaniem z postępu, idzie na STDERR: STDOUT musi zostać
+# czysty, bo przy `-o -` leci tam HTML książki.
+
+def _tty() -> bool:
+    return sys.stderr.isatty()
+
+
+_quiet = False   # -q: zadnego sprawozdania, tylko bledy
+
+
+def _out(msg: str = "") -> None:
+    if not _quiet:
+        print(msg, file=sys.stderr, flush=True)
+
+
+def _bold(msg: str) -> str:
+    return f"\033[1m{msg}\033[0m" if _tty() else msg
+
+
+_status_enabled = False   # ustawiane w main(): tylko terminal i tryb nie-verbose
+_status_active = False
+
+
+def status(msg: str) -> None:
+    """Komunikat ulotny – nadpisywany i na końcu kasowany, nie zostaje na ekranie
+    (dzięki temu pierwszą trwałą linią wydruku jest tytuł książki)."""
+    global _status_active
+    if not _status_enabled:
+        return
+    sys.stderr.write("\r\033[K" + msg)
+    sys.stderr.flush()
+    _status_active = True
+
+
+def status_clear() -> None:
+    global _status_active
+    if _status_active:
+        sys.stderr.write("\r\033[K")
+        sys.stderr.flush()
+        _status_active = False
+
+
+def _fmt_secs(s: float) -> str:
+    if s < 60:
+        return f"{s:.1f}s"
+    minutes, seconds = divmod(int(s), 60)
+    return f"{minutes}m{seconds:02d}s"
+
+
+def _fmt_size(path: str) -> str:
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return ""
+    if size < 1024 * 1024:
+        return f" ({size / 1024:.0f} kB)"
+    return f" ({size / (1024 * 1024):.1f} MB)"
+
+
+class _TqdmStreamHandler(logging.StreamHandler):
+    """Pisze przez tqdm.write: komunikat trafia nad pasek postępu, a pasek jest
+    przerysowany w tej samej linii (zwykły StreamHandler rozsypuje go na kilka)."""
+
     def __init__(self):
-        super().__init__()
-        self.pbar = tqdm(
-            total=7,
-            desc="Konwersja PDF ",
-            unit="etap",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, Aktualnie: {postfix}]"
-        )
-        self.pbar.set_postfix_str("Inicjalizacja...")
+        super().__init__(sys.stderr)
 
     def emit(self, record):
-        msg = record.getMessage()
-        match = re.match(r"Step (\d+) - (.+)", msg)
-        if match:
-            step_num = int(match.group(1))
-            step_desc = match.group(2)
+        try:
+            tqdm.write(self.format(record), file=sys.stderr)
+        except Exception:   # noqa: BLE001 - logowanie nie może wysadzić programu
+            self.handleError(record)
 
-            translations = {
-                "Fetching and parsing HTML": "Pobieranie i parsowanie HTML",
-                "Fetching and parsing CSS": "Pobieranie i parsowanie CSS",
-                "Applying CSS": "Aplikowanie stylów CSS",
-                "Creating formatting structure": "Tworzenie struktury formatowania",
-                "Formatting pages": "Obliczanie układu stron i łamanie tekstu",
-                "Drawing pages": "Rysowanie dokumentu",
-                "Adding metadata": "Dodawanie metadanych"
-            }
-            desc_pl = translations.get(step_desc, step_desc)
 
-            self.pbar.n = step_num
-            self.pbar.set_postfix_str(f"{desc_pl}...")
-            self.pbar.refresh()
+class _CleanFormatter(logging.Formatter):
+    """Bez "INFO:root:" – w terminalu to tylko szum."""
+    PREFIX = {
+        logging.WARNING: "Uwaga: ",
+        logging.ERROR: "Błąd: ",
+        logging.CRITICAL: "Błąd: ",
+    }
+
+    def format(self, record):
+        return self.PREFIX.get(record.levelno, "") + record.getMessage()
+
+
+# Etapy WeasyPrint (nazwy zdarzeń "Step N - ..." z weasyprint.progress).
+WP_STEPS = {
+    1: "Wczytywanie HTML",
+    2: "Wczytywanie CSS",
+    3: "Stosowanie stylów CSS",
+    4: "Budowa struktury dokumentu",
+    5: "Układ stron i łamanie tekstu",
+    6: "Rysowanie i zapis PDF",
+    7: "Metadane PDF",
+}
+
+
+class WeasyprintProgressHandler(logging.Handler):
+    """Każdy etap konwersji to osobna linia z czasem trwania.
+
+    Etapy 5 (łamanie tekstu) i 6 (rysowanie) zajmują grubo ponad 90% czasu, więc
+    etap 5 pokazuje dodatkowo numer przeliczanej strony – bez tego kilkuminutowe
+    milczenie wygląda jak zawieszenie programu."""
+
+    DESC_WIDTH = 44
+
+    def __init__(self, total_pages=None):
+        super().__init__()
+        self._total = total_pages
+        self._step = None
+        self._label = ""
+        self._detail = ""
+        self._started = None
+        self._last_draw = 0.0
+        self._failed = False
+        _out("Konwersja do PDF:")
+
+    def _render(self, mark: str, elapsed=None) -> str:
+        desc = f"{self._label} {self._detail}".strip()
+        if elapsed is None:
+            return f"  {mark} {desc}"
+        return f"  {mark} {desc.ljust(self.DESC_WIDTH)} {_fmt_secs(elapsed)}"
+
+    def _redraw(self) -> None:
+        if not _tty():
+            return
+        sys.stderr.write("\r\033[K" + self._render("…"))
+        sys.stderr.flush()
+
+    def _finish_step(self) -> None:
+        if self._step is None:
+            return
+        if self._step == 5:  # licznik stron ma sens tylko w trakcie
+            self._detail = f"({self._total} stron)" if self._total else ""
+        if _tty():
+            sys.stderr.write("\r\033[K")
+        _out(self._render("✗" if self._failed else "✓", time.time() - self._started))
+
+    def emit(self, record):
+        match = re.match(r"Step (\d+)(?: - (.*))?", record.getMessage())
+        if not match:
+            return
+        step = int(match.group(1))
+        rest = match.group(2) or ""
+
+        if step != self._step:
+            self._finish_step()
+            self._step = step
+            self._label = WP_STEPS.get(step) or rest or f"Etap {step}"
+            self._detail = ""
+            self._started = time.time()
+            self._last_draw = 0.0
+            self._redraw()
+
+        if step != 5:
+            return
+        page = re.search(r"Page (\d+)", rest)
+        if page:
+            self._detail = f"(strona {page.group(1)}/{self._total})" if self._total \
+                else f"(strona {page.group(1)})"
+        elif "Repagination" in rest:
+            self._detail = "(ponowne przeliczanie stron)"
+        else:
+            return
+        now = time.time()
+        if now - self._last_draw > 0.1:
+            self._last_draw = now
+            self._redraw()
+
+    def fail(self) -> None:
+        """Etap przerwany wyjatkiem – zeby nie zameldowac fałszywego sukcesu."""
+        self._failed = True
 
     def close(self):
-        self.pbar.n = 7
-        self.pbar.set_postfix_str("Zakończono")
-        self.pbar.refresh()
-        self.pbar.close()
+        self._finish_step()
+        self._step = None
         super().close()
 
 
@@ -192,7 +331,7 @@ class IbukSession(requests.Session):
         data.setdefault("ibukId", int(ibuk_id) if str(ibuk_id).isdigit() else ibuk_id)
         return BookMetadata(data)
 
-    def open_read(self, internal_id: str) -> dict:
+    def open_read(self, internal_id: str, log_level: int = logging.INFO) -> dict:
         """Otwiera książkę do czytania: rezerwuje slot i zwraca obiekt dostępu.
         Musi być wywołane tuż przed połączeniem socketu (slot ~5 min)."""
         r = self._reader_api(f"/proxy/content/api/v2/book/{internal_id}/read")
@@ -206,7 +345,8 @@ class IbukSession(requests.Session):
             raise PermissionError(f"Serwer nie przyznał dostępu: {rd}")
         if rd.get("isAllSlotsTaken"):
             logging.warning("Wszystkie sloty czytania zajęte – zamknij inne otwarte książki.")
-        logging.info(
+        logging.log(
+            log_level,
             f"Dostęp: type={access.get('type')} source={access.get('source')} "
             f"slotów={access.get('count')}"
         )
@@ -444,10 +584,10 @@ def download_book_html(ibs: IbukSession, meta: BookMetadata, page_count: int) ->
     pages = []
     css = fonts = None
 
-    print("")  # pusta linia dla czytelności
     try:
         i = 1
-        pbar = tqdm(total=page_count, desc="Pobieranie stron", unit="str")
+        pbar = tqdm(total=page_count, desc="Pobieranie stron", unit="str",
+                    leave=True, file=sys.stderr, disable=_quiet)
         while i <= page_count:
             # Serwer wymaga pola "css" w KAŻDYM żądaniu strony, inaczej przeliczanie
             # pozycji/rozmiarów czcionek na danej stronie wychodzi jako NaN (px->rem);
@@ -457,7 +597,7 @@ def download_book_html(ibs: IbukSession, meta: BookMetadata, page_count: int) ->
                 # Odświeżanie rezerwacji slotu (slot ~5 min).
                 if time.time() - last_refresh > 200:
                     try:
-                        ibs.open_read(meta.internal_id)
+                        ibs.open_read(meta.internal_id, log_level=logging.DEBUG)
                     except PermissionError:
                         pass
                     last_refresh = time.time()
@@ -480,12 +620,17 @@ def download_book_html(ibs: IbukSession, meta: BookMetadata, page_count: int) ->
     finally:
         sock.close()
 
-    print("\nZakończono pobieranie z serwera! Składanie pliku...\n")
-    return build_html(pages, css or "", fonts or "", meta)
+    status("Składanie dokumentu...")
+    html = build_html(pages, css or "", fonts or "", meta)
+    status_clear()
+    return html
 
 
-def write_output(book_html: str, output: str, title: str):
+def write_output(book_html: str, output: str, page_count=None):
     if output.lower().endswith(".pdf"):
+        wp_logger = logging.getLogger("weasyprint.progress")
+        wp_logger.propagate = False
+        wp_logger.setLevel(logging.INFO)
         try:
             from weasyprint import HTML
             import logging as wp_logging
@@ -493,11 +638,10 @@ def write_output(book_html: str, output: str, title: str):
             logging.error("Biblioteka 'weasyprint' nie jest zainstalowana! Zainstaluj: pip install weasyprint")
             sys.exit(1)
 
-        wp_logger = wp_logging.getLogger("weasyprint.progress")
-        wp_logger.setLevel(wp_logging.INFO)
-        wp_logger.propagate = False
-        progress_handler = WeasyprintProgressHandler()
-        wp_logger.addHandler(progress_handler)
+        progress_handler = None
+        if not _quiet:
+            progress_handler = WeasyprintProgressHandler(page_count)
+            wp_logger.addHandler(progress_handler)
 
         # Wyciszamy zalew ostrzeżeń "Ignored ... NaNrem" z CSS generowanego przez serwer
         # (WeasyPrint bezpiecznie pomija te pojedyncze właściwości).
@@ -506,33 +650,43 @@ def write_output(book_html: str, output: str, title: str):
         main_wp_logger.setLevel(wp_logging.ERROR)
         try:
             HTML(string=book_html).write_pdf(output)
+        except BaseException:
+            if progress_handler is not None:
+                progress_handler.fail()
+            raise
         finally:
             main_wp_logger.setLevel(prev_level)
-            progress_handler.close()
-            wp_logger.removeHandler(progress_handler)
-        print(f"\nGotowe! Książka \"{title}\" została zapisana jako: {output}")
+            if progress_handler is not None:
+                progress_handler.close()
+                wp_logger.removeHandler(progress_handler)
+        _out(_bold(f"Gotowe: {os.path.abspath(output)}") + _fmt_size(output))
     else:
         if output == "-":
             sys.stdout.write(book_html)
         else:
             with open(output, "w+", encoding="utf-8") as f:
                 f.write(book_html)
-        print(f"\nGotowe! Książka \"{title}\" została zapisana jako HTML: {output}")
+        if output != "-":
+            _out(_bold(f"Gotowe (HTML): {os.path.abspath(output)}") + _fmt_size(output))
 
 
 async def download_action(url: str, page_count, ibs: IbukSession, output):
     logging.info(f"Pobieranie książki z: {url}")
-    print("Inicjalizacja połączenia i autoryzacja...")
+    status("Pobieranie informacji o książce...")
     meta = ibs.get_book_metadata(url)
 
     if not page_count:
         page_count = int(meta.pages)
 
-    logging.info(f"Pobieram: {meta.author} - {meta.title} ({page_count} stron)")
+    status_clear()
+    # Pierwsza trwała linia wydruku: co właściwie się pobiera.
+    _out(_bold(meta.title) + (f" — {meta.author}" if meta.author else ""))
+    target = "STDOUT" if output == "-" else os.path.abspath(output)
+    _out(f"{page_count} stron → {target}")
 
     # Sieć jest synchroniczna (requests) – uruchamiamy w wątku, by nie blokować pętli.
     book_html = await asyncio.to_thread(download_book_html, ibs, meta, page_count)
-    write_output(book_html, output, meta.title)
+    write_output(book_html, output, page_count)
 
 
 async def query_action(url: str, ibs: IbukSession):
@@ -583,17 +737,30 @@ async def main():
         logging_level = logging.INFO
     elif args.quiet:
         logging_level = logging.CRITICAL
-    logging.basicConfig(level=logging_level)
+    handler = _TqdmStreamHandler()
+    handler.setFormatter(_CleanFormatter())
+    logging.basicConfig(level=logging_level, handlers=[handler])
+
+    global _status_enabled, _quiet
+    _quiet = bool(args.quiet)
+    _status_enabled = _tty() and not args.verbose and not _quiet
 
     ibs = IbukSession()
 
-    username = getattr(args, "username", None)
-    password = getattr(args, "password", None)
+    # Dane logowania: argumenty wiersza polecen maja priorytet, ale moga tez
+    # przyjsc ze zmiennych srodowiskowych (IBUK_USER / IBUK_PASS) -- wtedy haslo
+    # nie trafia do argv, czyli nie widza go inni uzytkownicy w /proc ani historia shella.
+    username = getattr(args, "username", None) or os.environ.get("IBUK_USER")
+    password = getattr(args, "password", None) or os.environ.get("IBUK_PASS")
     if bool(username) ^ bool(password):
-        parser.error("Podaj zarówno login (-u), jak i hasło (-p).")
+        parser.error("Podaj zarowno login (-u / IBUK_USER), jak i haslo (-p / IBUK_PASS).")
     if not username:
-        parser.error("Logowanie jest wymagane: podaj -u LOGIN -p HASŁO.")
-    ibs.login_uw(username, password)
+        parser.error("Logowanie jest wymagane: podaj -u LOGIN -p HASLO lub ustaw IBUK_USER / IBUK_PASS.")
+    status("Logowanie...")
+    try:
+        ibs.login_uw(username, password)
+    finally:
+        status_clear()
 
     if args.action == "download":
         await download_action(args.url, args.page_count, ibs, args.output)

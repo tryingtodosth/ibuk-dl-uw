@@ -20,3 +20,8 @@ ibuk-dl = "ibuk_dl.main:run_main"
 
 [project.urls]
 "Homepage" = "https://github.com/tryingtodosth/ibuk-dl-uw"
+
+[tool.setuptools.packages.find]
+include = ["ibuk_dl*"]
+exclude = ["contrib*", "CURRENT*", "OLD*"]
+

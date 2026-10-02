@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# ibuk - jednoargumentowy launcher dla ibuk-dl-uw
+#
+#   ibuk <adres-ksiazki> [dodatkowe opcje ibuk-dl]
+#
+# Login i haslo czytane sa z portfela (Secret Service / libsecret, czyli
+# gnome-keyring albo KWallet), a jesli go nie ma - z "pass".
+# Nigdy nie trafiaja do argv ani do historii shella - przekazywane sa
+# przez zmienne srodowiskowe IBUK_USER / IBUK_PASS.
+#
+# Zapisanie danych (raz):
+#   secret-tool store --label='BUW / ibuk-dl' service ibuk-dl-uw key username
+#   secret-tool store --label='BUW / ibuk-dl' service ibuk-dl-uw key password
+
+set -euo pipefail
+
+REPO="${IBUK_REPO:-$HOME/Projects/ibuk-dl-uw}"
+VENV="${IBUK_VENV:-$REPO/venv}"
+SERVICE=ibuk-dl-uw
+
+die() { printf 'ibuk: %s\n' "$*" >&2; exit 1; }
+
+if [ "$#" -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
+[ -d "$REPO/ibuk_dl" ] || die "nie znalazlem repo w $REPO (ustaw IBUK_REPO=/sciezka)"
+
+# ---------------------------------------------------------------- sekrety ---
+lookup() {  # lookup <username|password>
+    local v=""
+    if command -v secret-tool >/dev/null 2>&1; then
+        v=$(secret-tool lookup service "$SERVICE" key "$1" 2>/dev/null || true)
+    fi
+    if [ -z "$v" ] && command -v pass >/dev/null 2>&1; then
+        v=$(pass show "$SERVICE/$1" 2>/dev/null | head -n1 || true)
+    fi
+    [ -n "$v" ] || return 1
+    printf '%s' "$v"
+}
+
+if ! IBUK_USER=$(lookup username); then
+    die "brak loginu w portfelu. Zapisz go:
+  secret-tool store --label='BUW / ibuk-dl' service $SERVICE key username"
+fi
+if ! IBUK_PASS=$(lookup password); then
+    die "brak hasla w portfelu. Zapisz je:
+  secret-tool store --label='BUW / ibuk-dl' service $SERVICE key password"
+fi
+export IBUK_USER IBUK_PASS
+
+# ------------------------------------------------------------------ venv ----
+if [ ! -x "$VENV/bin/python" ]; then
+    printf 'ibuk: pierwsze uruchomienie - tworze venv w %s\n' "$VENV" >&2
+    python3 -m venv "$VENV" || die "nie udalo sie utworzyc venv (brak python3?)"
+    "$VENV/bin/pip" install --quiet --upgrade pip
+    "$VENV/bin/pip" install --quiet -e "$REPO" || die "instalacja zaleznosci nie udala sie"
+fi
+
+# -------------------------------------------------------------- argumenty ---
+URL="$1"; shift
+
+# Jesli uzytkownik nie podal -o/--output, zbuduj nazwe pliku ze slugu z adresu.
+have_output=0
+for a in "$@"; do
+    case "$a" in
+        -o|--output|-o*|--output=*) have_output=1 ;;
+    esac
+done
+
+out_args=()
+if [ "$have_output" -eq 0 ]; then
+    slug=${URL%%\?*}          # odetnij query string
+    slug=${slug%/}            # odetnij koncowy /
+    slug=${slug##*/}          # ostatni segment sciezki
+    [ -n "$slug" ] || slug=ibuk-book
+    out_args=(-o "${slug}.pdf")
+fi
+
+# Domyslnie cicho: logi INFO tylko na zyczenie (IBUK_VERBOSITY=-v).
+verbosity="${IBUK_VERBOSITY-}"
+
+# Bez `cd` do repo - plik ma wyladowac w katalogu, w ktorym stoi uzytkownik
+# (dotyczy tez wlasnego, relatywnego -o). Pakiet jest w venv (pip install -e),
+# PYTHONPATH to pas bezpieczenstwa, gdyby instalacja editable sie rozjechala.
+exec env PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" \
+    "$VENV/bin/python" -m ibuk_dl.main ${verbosity:+$verbosity} \
+    download "${out_args[@]}" "$@" "$URL"
